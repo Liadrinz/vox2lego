@@ -1,7 +1,6 @@
-from typing import List, Tuple
-from itertools import combinations
 from scipy.signal import convolve2d
 
+import tqdm
 import random
 import numpy as np
 
@@ -20,7 +19,24 @@ KERNELS = [
               [0, 0, 0]]),
 ]
 
-def get_growth_map(mask: np.ndarray) -> List[Tuple]:
+EDGE_KERNELS = [
+    np.array([[1, 0, -1],
+              [1, 0, -1],
+              [1, 0, -1]]),
+    np.array([[1, 1, 1],
+              [0, 0, 0],
+              [-1, -1, -1]]),
+]
+
+def self_similarity(array: np.ndarray) -> int:
+    array = array.reshape([-1,])
+    length = array.shape[0]
+    array = np.tile(array[np.newaxis, ...], [length, 1])
+    array_a = np.reshape(array, [-1,])
+    array_b = np.reshape(array.T, [-1,])
+    return np.sum((array_a == array_b).astype(np.int)) / (length * length)
+
+def get_growth_map(mask: np.ndarray) -> np.ndarray:
     mask = mask.astype(np.bool)
     gmaps = []
     forbids = []
@@ -39,57 +55,77 @@ def get_growth_map(mask: np.ndarray) -> List[Tuple]:
     gmask = gmaps.astype(np.bool).astype(np.int)
     return amaps * gmask - (1 - gmask)
 
-def grow(plane: np.ndarray) -> List[Tuple]:
-    mask = np.zeros_like(plane)
-    x, y = plane.shape
-    gmap = get_growth_map(mask)
-    points = np.array(np.where(gmap != -1)).T.tolist()
-    block_idx = 1
-    while len(points) > 0:
-        i, j = random.choice(points)
-        allow = gmap[i, j]
-        bxs = [2, 1]
-        bys = [10, 8, 6, 4, 3, 2, 1]
-        random.shuffle(bxs)
-        random.shuffle(bys)
-        for bx in bxs:
-            break_flag = False
-            if allow & 1:
-                bx = -bx
-            for by in bys:
-                if allow & 4:
-                    by = -by
-                to_place = mask[i:i+bx:[-1,1][bx>0], j:j+by:[-1,1][by>0]]
-                if (to_place == 0).all() and (0 <= i+bx <= x) and (0 <= j+by <= y):
-                    mask[i:i+bx:[-1,1][bx>0], j:j+by:[-1,1][by>0]] = block_idx
+def get_bonding_map(spmap: np.ndarray) -> np.ndarray:
+    bmap = np.zeros_like(spmap)
+    x, y = spmap.shape
+    block_idx = 0
+    i = 0
+    seen = []
+    while i < x-1:
+        j = 0
+        while j < y-1:
+            box = spmap[i:i+2,j:j+2]
+            box = np.reshape(box, [4, 1])
+            box_tup = tuple(np.squeeze(box).tolist())
+            if box_tup in seen:
+                j += 1
+                continue
+            seen.append(box_tup)
+            if self_similarity(box) <= 12/16:
+                if (bmap[i:i+2,j:j+2] == 0).all():
+                    bmap[i:i+2,j:j+2] = block_idx
                     block_idx += 1
-                    break_flag = True
-                    break
-                to_place = mask[i:i+by:[-1,1][by>0], j:j+bx:[-1,1][bx>0]]
-                if (to_place == 0).all() and (0 <= i+by <= x) and (0 <= j+bx <= y):
-                    mask[i:i+by:[-1,1][by>0], j:j+bx:[-1,1][bx>0]] = block_idx
-                    block_idx += 1
-                    break_flag = True
-                    break
-            if break_flag:
-                break
-        gmap = get_growth_map(mask)
-        points = np.array(np.where(gmap != -1)).T.tolist()
-    return mask
+            j += 1
+        i += 1
+    return bmap
+
+def legolize(vox: np.ndarray) -> np.ndarray:
+    result = []
+    vox = np.transpose(vox, [2, 0, 1])
+    with tqdm.tqdm(vox) as pbar:
+        for plane in vox:
+            spmap = np.zeros_like(plane)
+            x, y = plane.shape
+            is_blank = (plane == 0).astype(np.int)
+            spmap = np.where(is_blank, -1, spmap)
+            gmap = get_growth_map(spmap)
+            points = np.array(np.where(gmap != -1)).T.tolist()
+            block_idx = np.max(spmap) + 1
+            while len(points) > 0:
+                i, j = random.choice(points)
+                allow = gmap[i, j]
+                bxs = [2, 1]
+                bys = [10, 8, 6, 4, 3, 2, 1]
+                for bx in bxs:
+                    break_flag = False
+                    if allow & 1:
+                        bx = -bx
+                    for by in bys:
+                        if allow & 4:
+                            by = -by
+                        sx = [-1,1][bx>0]
+                        sy = [-1,1][by>0]
+                        to_place = spmap[i:i+bx:sx, j:j+by:sy]
+                        to_place_color = plane[i:i+bx:sx, j:j+by:sy]
+                        if (to_place == 0).all() and (0 <= i+bx <= x) and (0 <= j+by <= y) and self_similarity(to_place_color) == 1.0:
+                            spmap[i:i+bx:sx, j:j+by:sy] = block_idx
+                            block_idx += 1
+                            break_flag = True
+                            break
+                        to_place = spmap[i:i+by:sy, j:j+bx:sx]
+                        if (to_place == 0).all() and (0 <= i+by <= x) and (0 <= j+bx <= y) and self_similarity(to_place_color) == 1.0:
+                            spmap[i:i+by:sy, j:j+bx:sx] = block_idx
+                            block_idx += 1
+                            break_flag = True
+                            break
+                    if break_flag:
+                        break
+                gmap = get_growth_map(spmap)
+                points = np.array(np.where(gmap != -1)).T.tolist()
+            result.append(spmap)
+            pbar.update(1)
+    return np.array(result)
 
 if __name__ == "__main__":
-    mask = np.array([
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-    ])
-    growth_map = get_growth_map(mask)
-    print(growth_map)
-    mask = grow(mask)
-    print(mask)
+    mask = np.zeros((6, 6, 6))
+    spmap = legolize(mask)

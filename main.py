@@ -1,6 +1,6 @@
-from vox_loader import load_vox
-from lego import grow
+from loader import load_vox
+from lego import legolize
 
 voxels = load_vox("../models/VitaLemonTea.vox")
-result = grow(voxels[:, :, 0])
+result = legolize(voxels)
 print(result)
