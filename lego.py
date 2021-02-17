@@ -19,15 +19,6 @@ KERNELS = [
               [0, 0, 0]]),
 ]
 
-EDGE_KERNELS = [
-    np.array([[1, 0, -1],
-              [1, 0, -1],
-              [1, 0, -1]]),
-    np.array([[1, 1, 1],
-              [0, 0, 0],
-              [-1, -1, -1]]),
-]
-
 def self_similarity(array: np.ndarray) -> int:
     array = array.reshape([-1,])
     length = array.shape[0]
@@ -54,30 +45,6 @@ def get_growth_map(mask: np.ndarray) -> np.ndarray:
     amaps = l_allow + r_allow + u_allow + d_allow
     gmask = gmaps.astype(np.bool).astype(np.int)
     return amaps * gmask - (1 - gmask)
-
-def get_bonding_map(spmap: np.ndarray) -> np.ndarray:
-    bmap = np.zeros_like(spmap)
-    x, y = spmap.shape
-    block_idx = 0
-    i = 0
-    seen = []
-    while i < x-1:
-        j = 0
-        while j < y-1:
-            box = spmap[i:i+2,j:j+2]
-            box = np.reshape(box, [4, 1])
-            box_tup = tuple(np.squeeze(box).tolist())
-            if box_tup in seen:
-                j += 1
-                continue
-            seen.append(box_tup)
-            if self_similarity(box) <= 12/16:
-                if (bmap[i:i+2,j:j+2] == 0).all():
-                    bmap[i:i+2,j:j+2] = block_idx
-                    block_idx += 1
-            j += 1
-        i += 1
-    return bmap
 
 def legolize(vox: np.ndarray) -> np.ndarray:
     result = []
